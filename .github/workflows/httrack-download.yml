@@ -1,0 +1,52 @@
+name: HTTrack Website Copier
+
+on:
+  workflow_dispatch:
+    inputs:
+      website_url:
+        description: 'Website URL to download'
+        required: true
+        type: string
+      project_name:
+        description: 'Project name (optional)'
+        required: false
+        default: 'website'
+        type: string
+
+jobs:
+  download-website:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Install HTTrack
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y httrack
+      
+      - name: Download website
+        run: |
+          mkdir -p output
+          httrack "${{ inputs.website_url }}" \
+            -O "./output/${{ inputs.project_name }}" \
+            -v \
+            -%v \
+            -N0 \
+            -s0 \
+            -r99 \
+            -c8 \
+            -%e0
+      
+      - name: Create archive
+        run: |
+          cd output
+          zip -r "../${{ inputs.project_name }}.zip" "${{ inputs.project_name }}"
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.project_name }}-website
+          path: ${{ inputs.project_name }}.zip
+          retention-days: 7
