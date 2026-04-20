@@ -1,0 +1,44 @@
+name: Crawl Website with Playwright
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Start URL to crawl'
+        required: true
+        default: 'https://www.iaa.org.il/'
+      output_dir:
+        description: 'Output directory'
+        required: true
+        default: 'output'
+      max_depth:
+        description: 'Max crawl depth'
+        required: false
+        default: '2'
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install playwright aiohttp
+          python -m playwright install
+
+      - name: Run crawler
+        run: |
+          python crawl_site.py "${{ github.event.inputs.url }}" "${{ github.event.inputs.output_dir }}" "${{ github.event.inputs.max_depth }}"
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: website-crawl
+          path: ${{ github.event.inputs.output_dir }}
