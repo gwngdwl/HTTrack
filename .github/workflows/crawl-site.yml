@@ -38,6 +38,7 @@ jobs:
           python crawl_site.py "${{ github.event.inputs.url }}" "${{ github.event.inputs.output_dir }}" "${{ github.event.inputs.max_depth }}"
 
       - name: Upload results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: website-crawl
