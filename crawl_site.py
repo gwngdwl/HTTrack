@@ -1,29 +1,63 @@
 import asyncio
+import hashlib
 import os
 import re
 import time
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse, urljoin, unquote
 from playwright.async_api import async_playwright
 import aiohttp
 
 MAX_RUNTIME_SECONDS = 5.5 * 3600  # 5.5 hours
 
-# Utility to sanitize filenames
-INVALID_CHARS = r'[^a-zA-Z0-9._-]'
+# Characters that are illegal in Windows paths and rejected by upload-artifact.
+# Unicode letters (Hebrew included) are kept so file names stay readable.
+INVALID_CHARS = r'[\\/:*?"<>|\x00-\x1f]'
+MAX_SEGMENT_BYTES = 100  # stay well under the 255-byte file name limit
+
 def sanitize_filename(name):
-    return re.sub(INVALID_CHARS, '_', name)
+    """Make a single path segment safe for the filesystem and for upload-artifact."""
+    name = re.sub(INVALID_CHARS, '_', unquote(name)).strip(' .')
+    if name in ('', '.', '..'):
+        return '_'
+    if len(name.encode('utf-8')) > MAX_SEGMENT_BYTES:
+        root, ext = os.path.splitext(name)
+        ext = ext[:16]
+        digest = hashlib.sha1(name.encode('utf-8')).hexdigest()[:8]
+        budget = max(MAX_SEGMENT_BYTES - len(ext.encode('utf-8')) - 9, 1)
+        root = root.encode('utf-8')[:budget].decode('utf-8', 'ignore') or '_'
+        name = f"{root}_{digest}{ext}"
+    return name
 
 def get_local_path(url, base_url, output_dir):
     parsed = urlparse(url)
-    rel_path = parsed.path.lstrip('/') or 'index.html'
-    if rel_path.endswith('/'):
-        rel_path += 'index.html'
-    local_path = os.path.join(output_dir, sanitize_filename(parsed.netloc), rel_path)
+    segments = [sanitize_filename(s) for s in parsed.path.split('/') if s]
+    if not segments or parsed.path.endswith('/'):
+        segments.append('index.html')
+    if parsed.query:
+        # Keep two URLs that differ only by query string from overwriting each other
+        root, ext = os.path.splitext(segments[-1])
+        digest = hashlib.sha1(parsed.query.encode('utf-8')).hexdigest()[:8]
+        segments[-1] = f"{root}_{digest}{ext}"
+    return os.path.join(output_dir, sanitize_filename(parsed.netloc), *segments)
+
+def prepare_local_path(local_path):
+    """Create the parent directory and resolve page/directory name clashes."""
+    parts = [p for p in local_path.split(os.sep) if p]
+    for i in range(1, len(parts)):
+        ancestor = os.sep.join(parts[:i])
+        if os.path.isfile(ancestor):
+            # A page was already saved under this name; turn it into a directory
+            tmp = ancestor + '.__page__'
+            os.replace(ancestor, tmp)
+            os.makedirs(ancestor, exist_ok=True)
+            os.replace(tmp, os.path.join(ancestor, 'index.html'))
+    if os.path.isdir(local_path):
+        local_path = os.path.join(local_path, 'index.html')
+    os.makedirs(os.path.dirname(local_path), exist_ok=True)
     return local_path
 
 async def download_file(session, url, base_url, output_dir, errors):
-    local_path = get_local_path(url, base_url, output_dir)
-    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+    local_path = prepare_local_path(get_local_path(url, base_url, output_dir))
     try:
         async with session.get(url) as resp:
             if resp.status == 200:
@@ -48,8 +82,7 @@ async def crawl(url, base_url, output_dir, visited, session, page, start_time, e
     try:
         await page.goto(url, wait_until='networkidle')
         content = await page.content()
-        local_path = get_local_path(url, base_url, output_dir)
-        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        local_path = prepare_local_path(get_local_path(url, base_url, output_dir))
         with open(local_path, 'w', encoding='utf-8') as f:
             f.write(content)
         # Download images and other static files

@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       project_name:
-        description: 'Project name (optional)'
+        description: 'Project name (letters, digits, . _ - only)'
         required: false
         default: 'website'
         type: string
@@ -16,21 +16,32 @@ on:
 jobs:
   download-website:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
+
       - name: Install HTTrack
         run: |
           sudo apt-get update
           sudo apt-get install -y httrack
-      
+
+      - name: Resolve project name
+        env:
+          RAW_PROJECT_NAME: ${{ inputs.project_name }}
+        run: |
+          CLEAN=$(printf '%s' "$RAW_PROJECT_NAME" | tr -cd 'A-Za-z0-9._-')
+          if [ -z "$CLEAN" ]; then CLEAN=website; fi
+          echo "PROJECT_NAME=$CLEAN" >> "$GITHUB_ENV"
+          echo "Project name: $CLEAN"
+
       - name: Download website
+        env:
+          WEBSITE_URL: ${{ inputs.website_url }}
         run: |
           mkdir -p output
-          httrack "${{ inputs.website_url }}" \
-            -O "./output/${{ inputs.project_name }}" \
+          httrack "$WEBSITE_URL" \
+            -O "./output/$PROJECT_NAME" \
             -v \
             -%v \
             -N0 \
@@ -38,15 +49,24 @@ jobs:
             -r99 \
             -c8 \
             -%e0
-      
+
       - name: Create archive
+        if: always()
+        env:
+          PROJECT_NAME: ${{ env.PROJECT_NAME || 'website' }}
         run: |
-          cd output
-          zip -r "../${{ inputs.project_name }}.zip" "${{ inputs.project_name }}"
-      
+          if [ -d "output/$PROJECT_NAME" ]; then
+            (cd output && zip -r -q "../$PROJECT_NAME.zip" "$PROJECT_NAME")
+            ls -lh "$PROJECT_NAME.zip"
+          else
+            echo "No downloaded site at output/$PROJECT_NAME to archive."
+          fi
+
       - name: Upload artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.project_name }}-website
-          path: ${{ inputs.project_name }}.zip
+          name: website-${{ github.run_number }}
+          path: ${{ env.PROJECT_NAME || 'website' }}.zip
+          if-no-files-found: warn
           retention-days: 7

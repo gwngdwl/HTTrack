@@ -8,7 +8,7 @@ on:
         required: true
         default: 'https://www.iaa.org.il/'
       output_dir:
-        description: 'Output directory'
+        description: 'Output directory (letters, digits, . _ - only)'
         required: true
         default: 'output'
       max_depth:
@@ -33,13 +33,39 @@ jobs:
           pip install playwright aiohttp
           python -m playwright install
 
-      - name: Run crawler
+      - name: Resolve output directory
+        env:
+          RAW_OUTPUT_DIR: ${{ inputs.output_dir }}
         run: |
-          python crawl_site.py "${{ github.event.inputs.url }}" "${{ github.event.inputs.output_dir }}" "${{ github.event.inputs.max_depth }}"
+          CLEAN=$(printf '%s' "$RAW_OUTPUT_DIR" | tr -cd 'A-Za-z0-9._-')
+          if [ -z "$CLEAN" ]; then CLEAN=output; fi
+          echo "OUTPUT_DIR=$CLEAN" >> "$GITHUB_ENV"
+          echo "Output directory: $CLEAN"
+
+      - name: Run crawler
+        env:
+          START_URL: ${{ inputs.url }}
+          MAX_DEPTH: ${{ inputs.max_depth }}
+        run: |
+          python crawl_site.py "$START_URL" "$OUTPUT_DIR" "${MAX_DEPTH:-2}"
+
+      - name: Archive results
+        if: always()
+        env:
+          OUTPUT_DIR: ${{ env.OUTPUT_DIR || 'output' }}
+        run: |
+          if [ -d "$OUTPUT_DIR" ]; then
+            zip -r -q "crawl-result.zip" "$OUTPUT_DIR"
+            ls -lh crawl-result.zip
+          else
+            echo "No output directory '$OUTPUT_DIR' to archive."
+          fi
 
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: website-crawl
-          path: ${{ github.event.inputs.output_dir }}
+          name: website-crawl-${{ github.run_number }}
+          path: crawl-result.zip
+          if-no-files-found: warn
+          retention-days: 7
